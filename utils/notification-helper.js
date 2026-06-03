@@ -1,85 +1,51 @@
 /**
  * notification-helper.js
  *
- * Abstraction layer for the Capacitor LocalNotifications plugin,
- * mirroring its API surface: schedule(), cancel(), requestPermissions(),
- * getPermissions(), channel management, badge count, wake lock, and
- * event listeners.
+ * Reliable abstraction over expo-notifications (SDK 54 / expo-notifications 0.29.x).
  *
- * Includes availability guards so the module is safe to import in
- * web/browser environments where the plugin is not present.
+ * All methods are safe to call from web (they no-op via isAvailable()).
+ * All scheduling uses the proven trigger format for this SDK version.
  */
 
 import * as Notifications from "expo-notifications";
 import { Platform, AppState } from "react-native";
 
-// ---------------------------------------------------------------------------
-// Android Notification Channels
-// ---------------------------------------------------------------------------
+// ─── Channels ───────────────────────────────────────────────────────────────
 
-/**
- * The three channels defined for this app:
- *
- *  task_reminders  – High importance (4)  – sound + vibration + lights
- *  urgent_tasks    – Urgent importance (5) – sound + vibration + lights
- *  daily_summary   – Default importance (3) – sound only (no vibration/lights)
- */
 export const CHANNELS = {
-  TASK_REMINDERS: "task_reminders",
-  URGENT_TASKS: "urgent_tasks",
-  DAILY_SUMMARY: "daily_summary",
+  TASK_REMINDERS: "task_reminders",   // High importance (4)
+  URGENT_TASKS:   "urgent_tasks",     // Urgent/MAX importance (5)
+  DAILY_SUMMARY:  "daily_summary",    // Default importance (3)
 };
 
-// Importance values as defined by the Capacitor LocalNotifications plugin
-const IMPORTANCE = {
-  DEFAULT: 3, // AndroidImportance.DEFAULT
-  HIGH: 4,    // AndroidImportance.HIGH
-  URGENT: 5,  // AndroidImportance.MAX
-};
+// ─── Availability ────────────────────────────────────────────────────────────
 
-// ---------------------------------------------------------------------------
-// Availability check
-// ---------------------------------------------------------------------------
-
-/**
- * Returns true when the LocalNotifications plugin (expo-notifications) is
- * available in the current environment. On web the Notifications API has
- * limited support; we gate native-only calls behind this check.
- */
 export function isAvailable() {
-  if (Platform.OS === "web") {
-    // expo-notifications has partial web support; treat as unavailable for
-    // native-specific features (channels, badge, wake lock).
-    return false;
-  }
-  return true;
+  return Platform.OS !== "web";
 }
 
-// ---------------------------------------------------------------------------
-// Initialization – call once at app startup
-// ---------------------------------------------------------------------------
+// ─── Module-level listener handles ──────────────────────────────────────────
 
-let _appStateSubscription = null;
-let _notificationResponseSubscription = null;
-let _notificationReceivedSubscription = null;
+let _receivedSub  = null;
+let _responseSub  = null;
+let _appStateSub  = null;
+
+// ─── Initialization ──────────────────────────────────────────────────────────
 
 /**
- * Initialize the notification system:
- *  1. Set foreground notification handler
- *  2. Create Android channels
- *  3. Request permissions
- *  4. Register event listeners
+ * Call ONCE at app startup (in _layout.tsx useEffect).
  *
- * @param {object} options
- * @param {function} [options.onNotificationReceived]   – called when a notification arrives in foreground
- * @param {function} [options.onNotificationResponse]   – called when user taps a notification
- * @param {function} [options.onAppStateChange]         – called on app state change (for reschedule logic)
- * @returns {Promise<void>}
+ * Sets the foreground handler, creates Android channels, requests permissions,
+ * and registers event listeners.
  */
-export async function initialize({ onNotificationReceived, onNotificationResponse, onAppStateChange } = {}) {
+export async function initialize({
+  onNotificationReceived,
+  onNotificationResponse,
+  onAppStateChange,
+} = {}) {
   if (!isAvailable()) return;
 
-  // 1. Foreground handler
+  // 1. Foreground display behaviour
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
       shouldShowAlert: true,
@@ -94,384 +60,325 @@ export async function initialize({ onNotificationReceived, onNotificationRespons
   // 3. Permissions
   await requestPermissions();
 
-  // 4. Event listeners
-  _setupListeners({ onNotificationReceived, onNotificationResponse, onAppStateChange });
+  // 4. Listeners
+  _removeListeners();
+  if (onNotificationReceived) {
+    _receivedSub = Notifications.addNotificationReceivedListener(onNotificationReceived);
+  }
+  if (onNotificationResponse) {
+    _responseSub = Notifications.addNotificationResponseReceivedListener(onNotificationResponse);
+  }
+  if (onAppStateChange) {
+    _appStateSub = AppState.addEventListener("change", onAppStateChange);
+  }
 }
 
-// ---------------------------------------------------------------------------
-// Android channel management
-// ---------------------------------------------------------------------------
+// ─── Android channel management ──────────────────────────────────────────────
 
-/**
- * Create all three notification channels for Android.
- * Safe to call multiple times – the OS is idempotent for existing channels.
- */
 export async function createAndroidChannels() {
   if (!isAvailable() || Platform.OS !== "android") return;
 
-  // task_reminders – High importance (4)
+  // task_reminders – High (4)
   await Notifications.setNotificationChannelAsync(CHANNELS.TASK_REMINDERS, {
     name: "Task Reminders",
-    importance: Notifications.AndroidImportance.HIGH, // 4
+    importance: Notifications.AndroidImportance.HIGH,
     sound: "default",
     enableVibrate: true,
     vibrationPattern: [0, 250, 250, 250],
     lightColor: "#6366f1",
     showBadge: true,
-    description: "Notifications for scheduled task reminders",
   });
 
-  // urgent_tasks – Urgent importance (5)
+  // urgent_tasks – Urgent/MAX (5)
   await Notifications.setNotificationChannelAsync(CHANNELS.URGENT_TASKS, {
     name: "Urgent Tasks",
-    importance: Notifications.AndroidImportance.MAX, // 5
+    importance: Notifications.AndroidImportance.MAX,
     sound: "default",
     enableVibrate: true,
     vibrationPattern: [0, 100, 100, 300],
     lightColor: "#ef4444",
     showBadge: true,
-    description: "High-priority task alerts requiring immediate attention",
   });
 
-  // daily_summary – Default importance (3)
+  // daily_summary – Default (3)
   await Notifications.setNotificationChannelAsync(CHANNELS.DAILY_SUMMARY, {
     name: "Daily Summary",
-    importance: Notifications.AndroidImportance.DEFAULT, // 3
+    importance: Notifications.AndroidImportance.DEFAULT,
     sound: "default",
     enableVibrate: false,
-    lightColor: "#6366f1",
     showBadge: false,
-    description: "Morning and evening daily task summaries",
   });
 }
 
-/**
- * Delete all app-specific notification channels (e.g. on sign-out).
- */
-export async function deleteAndroidChannels() {
-  if (!isAvailable() || Platform.OS !== "android") return;
-  for (const id of Object.values(CHANNELS)) {
-    await Notifications.deleteNotificationChannelAsync(id).catch(() => {});
-  }
-}
+// ─── Permissions ─────────────────────────────────────────────────────────────
 
-// ---------------------------------------------------------------------------
-// Permission handling
-// ---------------------------------------------------------------------------
-
-/**
- * Request notification permissions from the user.
- * Maps to Capacitor's LocalNotifications.requestPermissions().
- * @returns {Promise<'granted'|'denied'|'undetermined'>}
- */
 export async function requestPermissions() {
   if (!isAvailable()) return "denied";
-
   const { status: existing } = await Notifications.getPermissionsAsync();
   if (existing === "granted") return "granted";
-
   const { status } = await Notifications.requestPermissionsAsync({
-    ios: {
-      allowAlert: true,
-      allowBadge: true,
-      allowSound: true,
-      allowAnnouncements: true,
-    },
+    ios: { allowAlert: true, allowBadge: true, allowSound: true },
   });
   return status;
 }
 
-/**
- * Check the current permission status without prompting.
- * Maps to Capacitor's LocalNotifications.getPermissions().
- * @returns {Promise<'granted'|'denied'|'undetermined'>}
- */
 export async function getPermissions() {
   if (!isAvailable()) return "denied";
   const { status } = await Notifications.getPermissionsAsync();
   return status;
 }
 
-/**
- * Returns true if notifications are currently permitted.
- */
 export async function hasPermission() {
-  const status = await getPermissions();
-  return status === "granted";
+  return (await getPermissions()) === "granted";
 }
 
-// ---------------------------------------------------------------------------
-// Schedule / Cancel
-// ---------------------------------------------------------------------------
+// ─── Schedule a one-time notification ────────────────────────────────────────
 
 /**
- * Schedule a local notification.
- * Maps to Capacitor's LocalNotifications.schedule().
+ * Schedule a notification at an exact Date.
  *
- * @param {object} opts
- * @param {number}  opts.id          – numeric notification id
- * @param {string}  opts.title
- * @param {string}  opts.body
- * @param {Date}    opts.triggerDate – when to fire
- * @param {string}  [opts.channel]   – one of CHANNELS.*; defaults to task_reminders
- * @param {object}  [opts.data]      – extra payload
- * @param {boolean} [opts.isUrgent]  – if true, uses urgent_tasks channel
- * @returns {Promise<string|null>}   – the notification identifier, or null on failure
+ * Uses the PROVEN trigger format for expo-notifications 0.28 / 0.29:
+ *   { type: Notifications.SchedulableTriggerInputTypes.DATE, date: <Date> }
+ *
+ * Falls back to { seconds: N } if SchedulableTriggerInputTypes is unavailable
+ * (older SDK). Both are valid for one-shot future notifications.
+ *
+ * @returns {Promise<string|null>} notification identifier, or null on failure
  */
-export async function schedule({ id, title, body, triggerDate, channel, data = {}, isUrgent = false }) {
+export async function schedule({
+  id,
+  title,
+  body,
+  triggerDate,
+  channelId,
+  data = {},
+  isUrgent = false,
+}) {
   if (!isAvailable()) return null;
+  if (!(await hasPermission())) {
+    console.warn("[notifications] Permission not granted – skipping schedule");
+    return null;
+  }
 
-  const permitted = await hasPermission();
-  if (!permitted) return null;
+  const resolvedChannel =
+    channelId ?? (isUrgent ? CHANNELS.URGENT_TASKS : CHANNELS.TASK_REMINDERS);
 
-  // Pick the right channel
-  const androidChannelId =
-    channel ??
-    (isUrgent ? CHANNELS.URGENT_TASKS : CHANNELS.TASK_REMINDERS);
+  // Build trigger — works in expo-notifications 0.28+ (SchedulableTriggerInputTypes)
+  // and also works as a pure { seconds } fallback for robustness.
+  let trigger;
+  const secondsUntil = Math.floor((triggerDate.getTime() - Date.now()) / 1000);
+  if (secondsUntil <= 0) {
+    console.warn(
+      `[notifications] Trigger date is in the past for id=${id}, skipping`
+    );
+    return null;
+  }
+
+  try {
+    // Preferred: DATE trigger (exact calendar time, survives midnight rollover)
+    trigger = {
+      type: Notifications.SchedulableTriggerInputTypes.DATE,
+      date: triggerDate,
+    };
+  } catch {
+    // Fallback: seconds-based trigger (always works)
+    trigger = { seconds: secondsUntil };
+  }
+
+  const content = {
+    title,
+    body,
+    sound: "default",
+    data: { ...data, _notifId: id },
+    badge: 1,
+  };
+
+  // channelId is Android-only – adding it on iOS causes no harm but be explicit
+  if (Platform.OS === "android") {
+    content.channelId = resolvedChannel;
+  }
 
   try {
     const identifier = await Notifications.scheduleNotificationAsync({
       identifier: String(id),
-      content: {
-        title,
-        body,
-        sound: "default",
-        data: { ...data, notificationId: id },
-        badge: 1,
-        ...(Platform.OS === "android" && { channelId: androidChannelId }),
-      },
-      trigger: {
-        type: Notifications.SchedulableTriggerInputTypes.DATE,
-        date: triggerDate,
-      },
+      content,
+      trigger,
     });
+    console.log(
+      `[notifications] Scheduled id=${id} title="${title}" at ${triggerDate.toISOString()} (in ${secondsUntil}s)`
+    );
     return identifier;
-  } catch (error) {
-    console.warn("[notification-helper] schedule() failed:", error);
+  } catch (err) {
+    console.error("[notifications] scheduleNotificationAsync failed:", err);
     return null;
   }
 }
 
-/**
- * Schedule the 30-minutes-early reminder for a task.
- * Uses the task_reminders channel.
- */
+// ─── Schedule 30-minute early reminder ───────────────────────────────────────
+
 export async function scheduleBefore30Min({ id, title, triggerDate, data = {} }) {
-  const thirtyMinBefore = new Date(triggerDate.getTime() - 30 * 60 * 1000);
-  if (thirtyMinBefore <= new Date()) return null; // already passed
+  const earlyDate = new Date(triggerDate.getTime() - 30 * 60 * 1000);
+  if (earlyDate <= new Date()) return null;
+  // Use a distinct id: original id XOR a constant to avoid collision
+  const earlyId = (id ^ 0xABCDEF) >>> 0; // unsigned 32-bit, guaranteed distinct
   return schedule({
-    id: id + 300000, // offset id to avoid collision with on-time notification
+    id: earlyId,
     title: "⏰ Coming up: " + title,
     body: "This task starts in 30 minutes",
-    triggerDate: thirtyMinBefore,
-    channel: CHANNELS.TASK_REMINDERS,
+    triggerDate: earlyDate,
+    channelId: CHANNELS.TASK_REMINDERS,
     data,
   });
 }
 
+// ─── Schedule daily repeating notification ───────────────────────────────────
+
 /**
- * Schedule the daily summary notification.
- * Uses the daily_summary channel.
- *
- * @param {object} opts
- * @param {number}  opts.id
- * @param {string}  opts.title
- * @param {string}  opts.body
- * @param {object}  opts.time   – { hour: number, minute: number }
+ * Schedule a daily repeating notification.
+ * Uses CalendarTriggerInput (hour+minute repeat) which is the correct
+ * expo-notifications 0.29 API for daily repeats.
  */
 export async function scheduleDailySummary({ id, title, body, time }) {
   if (!isAvailable()) return null;
-  const permitted = await hasPermission();
-  if (!permitted) return null;
+  if (!(await hasPermission())) return null;
+
+  await cancel(id); // always cancel before re-scheduling
+
+  const content = {
+    title,
+    body,
+    sound: "default",
+  };
+  if (Platform.OS === "android") {
+    content.channelId = CHANNELS.DAILY_SUMMARY;
+  }
 
   try {
-    // Cancel any existing one with this id first
-    await cancel(id);
-
+    // CalendarTriggerInput with repeats:true fires daily at hour:minute
     const identifier = await Notifications.scheduleNotificationAsync({
       identifier: String(id),
-      content: {
-        title,
-        body,
-        sound: "default",
-        ...(Platform.OS === "android" && { channelId: CHANNELS.DAILY_SUMMARY }),
-      },
+      content,
       trigger: {
-        type: Notifications.SchedulableTriggerInputTypes.DAILY,
+        type: Notifications.SchedulableTriggerInputTypes.CALENDAR,
+        repeats: true,
         hour: time.hour,
         minute: time.minute,
       },
     });
+    console.log(
+      `[notifications] Daily summary id=${id} scheduled at ${time.hour}:${String(time.minute).padStart(2,"0")}`
+    );
     return identifier;
-  } catch (error) {
-    console.warn("[notification-helper] scheduleDailySummary() failed:", error);
+  } catch (err) {
+    console.error("[notifications] scheduleDailySummary failed:", err);
     return null;
   }
 }
 
-/**
- * Cancel a scheduled notification by its id.
- * Maps to Capacitor's LocalNotifications.cancel().
- */
+// ─── Cancel ──────────────────────────────────────────────────────────────────
+
 export async function cancel(id) {
   if (!isAvailable()) return;
   try {
     await Notifications.cancelScheduledNotificationAsync(String(id));
   } catch {
-    // Notification may not exist – ignore
+    /* not found – fine */
   }
 }
 
-/**
- * Cancel multiple notifications by an array of ids.
- */
-export async function cancelAll(ids = []) {
-  if (!isAvailable()) return;
-  await Promise.all(ids.map((id) => cancel(id)));
+export async function cancelMultiple(ids = []) {
+  await Promise.all(ids.map(cancel));
 }
 
-/**
- * Cancel ALL scheduled notifications for the app.
- */
 export async function cancelAllScheduled() {
   if (!isAvailable()) return;
   await Notifications.cancelAllScheduledNotificationsAsync();
 }
 
-// ---------------------------------------------------------------------------
-// Badge count
-// ---------------------------------------------------------------------------
+// ─── Badge ───────────────────────────────────────────────────────────────────
 
-/**
- * Set the app icon badge count.
- * @param {number} count
- */
 export async function setBadgeCount(count) {
   if (!isAvailable()) return;
-  try {
-    await Notifications.setBadgeCountAsync(count);
-  } catch {
-    // Badge not supported on all platforms
-  }
+  try { await Notifications.setBadgeCountAsync(count); } catch { /* ignore */ }
 }
 
-/**
- * Clear the app icon badge.
- */
 export async function clearBadge() {
   await setBadgeCount(0);
 }
 
-// ---------------------------------------------------------------------------
-// Wake lock helpers
-// ---------------------------------------------------------------------------
-// React Native / Expo does not expose a direct wake lock API; the closest
-// approximation is keeping the notification system active via AppState
-// monitoring. These stubs match the Capacitor plugin's wake lock interface
-// for API consistency.
+// ─── Wake lock (logical stub – OS delivers notifications natively) ────────────
 
 let _wakeLockActive = false;
+export function acquireWakeLock()  { _wakeLockActive = true; }
+export function releaseWakeLock()  { _wakeLockActive = false; }
+export function isWakeLockActive() { return _wakeLockActive; }
 
-/**
- * Acquire a logical wake lock to ensure pending notifications are delivered
- * when the device would otherwise be idle.
- */
-export function acquireWakeLock() {
-  _wakeLockActive = true;
-  // In RN, background delivery is handled by the OS notification system.
-  // This flag is used internally to gate reschedule logic.
-}
+// ─── Listeners ───────────────────────────────────────────────────────────────
 
-/**
- * Release the wake lock.
- */
-export function releaseWakeLock() {
-  _wakeLockActive = false;
-}
-
-export function isWakeLockActive() {
-  return _wakeLockActive;
-}
-
-// ---------------------------------------------------------------------------
-// Event listeners (lifecycle integration)
-// ---------------------------------------------------------------------------
-
-function _setupListeners({ onNotificationReceived, onNotificationResponse, onAppStateChange }) {
-  // Clean up any prior subscriptions
-  _notificationReceivedSubscription?.remove();
-  _notificationResponseSubscription?.remove();
-  _appStateSubscription?.remove();
-
-  // Fired when a notification is delivered while the app is in the foreground
-  if (onNotificationReceived) {
-    _notificationReceivedSubscription = Notifications.addNotificationReceivedListener(
-      onNotificationReceived
-    );
-  }
-
-  // Fired when the user taps a notification (foreground or background)
-  if (onNotificationResponse) {
-    _notificationResponseSubscription = Notifications.addNotificationResponseReceivedListener(
-      onNotificationResponse
-    );
-  }
-
-  // AppState listener – used to reschedule notifications when the app comes
-  // back to the foreground (e.g. after device restart or missed alerts)
-  if (onAppStateChange) {
-    _appStateSubscription = AppState.addEventListener("change", (nextState) => {
-      onAppStateChange(nextState);
-    });
-  }
-}
-
-/**
- * Remove all event listeners registered by initialize().
- * Call this in component cleanup / app teardown.
- */
 export function removeAllListeners() {
-  _notificationReceivedSubscription?.remove();
-  _notificationResponseSubscription?.remove();
-  _appStateSubscription?.remove();
-  _notificationReceivedSubscription = null;
-  _notificationResponseSubscription = null;
-  _appStateSubscription = null;
+  _removeListeners();
 }
 
-// ---------------------------------------------------------------------------
-// Utility helpers used by the scheduler
-// ---------------------------------------------------------------------------
+function _removeListeners() {
+  _receivedSub?.remove();
+  _responseSub?.remove();
+  _appStateSub?.remove();
+  _receivedSub = _responseSub = _appStateSub = null;
+}
+
+// ─── Utilities ───────────────────────────────────────────────────────────────
 
 /**
- * Build a numeric notification ID from a task ID string.
- * Capacitor LocalNotifications requires integer IDs.
+ * Deterministic numeric ID from a task string ID.
+ * Result is a positive 31-bit integer (stays well within Android int range).
  */
 export function taskNotifId(taskId) {
-  // Deterministic hash → positive 32-bit integer
-  let hash = 0;
+  let h = 0x811c9dc5; // FNV-1a offset basis
   for (let i = 0; i < taskId.length; i++) {
-    hash = (Math.imul(31, hash) + taskId.charCodeAt(i)) | 0;
+    h ^= taskId.charCodeAt(i);
+    h = (Math.imul(h, 0x01000193)) >>> 0; // unsigned 32-bit
   }
-  return Math.abs(hash);
+  return h & 0x7fffffff; // keep positive, 31-bit
 }
 
 /**
- * Build a Date from scheduledDate ("YYYY-MM-DD") and scheduledTime ("HH:MM").
- * Returns null if the date is in the past.
+ * Get the "early reminder" notification ID for a task.
+ * Guaranteed to be different from taskNotifId(taskId).
+ */
+export function taskEarlyNotifId(taskId) {
+  return (taskNotifId(taskId) ^ 0x40000000) & 0x7fffffff;
+}
+
+/**
+ * Build a JS Date from "YYYY-MM-DD" + "HH:MM" in LOCAL time.
+ *
+ * CRITICAL: We must NOT use `new Date("YYYY-MM-DDThh:mm:ss")` directly —
+ * that string WITHOUT a timezone suffix is parsed as LOCAL time on V8/Android,
+ * but the spec says it should be UTC for date-only strings. To be safe we
+ * always split and construct with explicit local components.
+ *
+ * Returns null if the resulting time is in the past or input is invalid.
  */
 export function buildTriggerDate(scheduledDate, scheduledTime) {
   if (!scheduledDate) return null;
-  const timeStr = scheduledTime ?? "09:00";
-  const dt = new Date(`${scheduledDate}T${timeStr}:00`);
-  if (isNaN(dt.getTime()) || dt <= new Date()) return null;
+
+  const [year, month, day] = scheduledDate.split("-").map(Number);
+  const [hour, minute] = (scheduledTime ?? "09:00").split(":").map(Number);
+
+  if (!year || isNaN(month) || isNaN(day) || isNaN(hour) || isNaN(minute)) return null;
+
+  // Construct in local time explicitly — no timezone ambiguity
+  const dt = new Date(year, month - 1, day, hour, minute, 0, 0);
+
+  if (isNaN(dt.getTime())) return null;
+  if (dt <= new Date()) return null; // already passed
+
   return dt;
 }
 
 /**
- * Determine the correct channel for a task based on its priority.
+ * Channel selection based on task priority.
  */
 export function channelForPriority(priority) {
-  if (priority === "high") return CHANNELS.URGENT_TASKS;
-  return CHANNELS.TASK_REMINDERS;
+  return priority === "high" ? CHANNELS.URGENT_TASKS : CHANNELS.TASK_REMINDERS;
 }
