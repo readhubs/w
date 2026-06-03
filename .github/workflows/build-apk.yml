@@ -36,7 +36,7 @@ jobs:
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
-      - name: Build APK (preview) with logs
-        run: eas build --platform android --profile preview --non-interactive --logs
+      - name: Build APK (preview)
+        run: eas build --platform android --profile preview --non-interactive --verbose-logs --build-logger-level debug
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
