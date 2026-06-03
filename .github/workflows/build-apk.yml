@@ -25,6 +25,20 @@ jobs:
       - name: Install EAS CLI
         run: npm install -g eas-cli
 
+      - name: Verify EXPO_TOKEN is set
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "❌ ERROR: EXPO_TOKEN secret is not set!"
+            echo "Go to: GitHub repo → Settings → Secrets and variables → Actions → New repository secret"
+            echo "Name: EXPO_TOKEN"
+            echo "Value: your token from https://expo.dev/accounts/[username]/settings/access-tokens"
+            exit 1
+          else
+            echo "✅ EXPO_TOKEN is set (length: ${#EXPO_TOKEN})"
+          fi
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
       - name: Build APK (preview)
         run: eas build --platform android --profile preview --non-interactive
         env:
