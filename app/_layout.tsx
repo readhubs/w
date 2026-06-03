@@ -8,9 +8,8 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import * as Notifications from "expo-notifications";
-import React, { useEffect } from "react";
-import { Platform } from "react-native";
+import React, { useEffect, useRef } from "react";
+import { AppState, Platform } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -18,58 +17,64 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AppProvider, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
+import {
+  initialize as initNotifications,
+  removeAllListeners,
+  clearBadge,
+  acquireWakeLock,
+  releaseWakeLock,
+  isAvailable as notificationsAvailable,
+} from "@/utils/notification-helper";
 
 SplashScreen.preventAutoHideAsync();
 
 const queryClient = new QueryClient();
 
-// Set how notifications behave when app is in foreground
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
-});
-
-async function setupNotifications() {
-  // Create notification channel for Android
-  if (Platform.OS === "android") {
-    await Notifications.setNotificationChannelAsync("default", {
-      name: "Default",
-      importance: Notifications.AndroidImportance.MAX,
-      vibrationPattern: [0, 250, 250, 250],
-      lightColor: "#6366f1",
-      sound: "default",
-      enableVibrate: true,
-      showBadge: true,
-    });
-    await Notifications.setNotificationChannelAsync("reminders", {
-      name: "Task Reminders",
-      importance: Notifications.AndroidImportance.HIGH,
-      vibrationPattern: [0, 250, 250, 250],
-      lightColor: "#6366f1",
-      sound: "default",
-      enableVibrate: true,
-      showBadge: true,
-    });
-  }
-
-  // Request permission
-  const { status: existingStatus } = await Notifications.getPermissionsAsync();
-  if (existingStatus !== "granted") {
-    await Notifications.requestPermissionsAsync({
-      ios: {
-        allowAlert: true,
-        allowBadge: true,
-        allowSound: true,
-      },
-    });
-  }
-}
+// ---------------------------------------------------------------------------
+// Inner layout — needs access to AppContext for settings-aware scheduling
+// ---------------------------------------------------------------------------
 
 function RootLayoutNav() {
   const colors = useColors();
+  const appStateRef = useRef(AppState.currentState);
+
+  useEffect(() => {
+    // Initialize the Capacitor LocalNotifications plugin abstraction.
+    // This sets up foreground handler, creates Android channels, requests
+    // permissions, and registers event listeners.
+    initNotifications({
+      onNotificationReceived: (notification) => {
+        // Notification arrived while app is foregrounded — clear badge when
+        // the user is actively looking at the app.
+        clearBadge();
+      },
+      onNotificationResponse: (response) => {
+        // User tapped a notification — could navigate to the relevant task.
+        const data = response.notification.request.content.data;
+        if (data?.taskId) {
+          // Navigation is handled at screen level via deep links; we acquire a
+          // wake lock here to ensure any follow-up scheduling completes.
+          acquireWakeLock();
+          setTimeout(() => releaseWakeLock(), 3000);
+        }
+      },
+      onAppStateChange: (nextState) => {
+        const prev = appStateRef.current;
+        appStateRef.current = nextState;
+
+        if (prev.match(/inactive|background/) && nextState === "active") {
+          // App came to foreground — clear badge count
+          if (notificationsAvailable()) {
+            clearBadge();
+          }
+        }
+      },
+    });
+
+    return () => {
+      removeAllListeners();
+    };
+  }, []);
 
   return (
     <Stack
@@ -94,6 +99,10 @@ function RootLayoutNav() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Root layout
+// ---------------------------------------------------------------------------
+
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
     Inter_400Regular,
@@ -101,10 +110,6 @@ export default function RootLayout() {
     Inter_600SemiBold,
     Inter_700Bold,
   });
-
-  useEffect(() => {
-    setupNotifications();
-  }, []);
 
   useEffect(() => {
     if (fontsLoaded || fontError) {

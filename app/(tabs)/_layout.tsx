@@ -1,17 +1,26 @@
 import { BlurView } from "expo-blur";
 import { Tabs } from "expo-router";
-import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import React from "react";
 import { Platform, StyleSheet, View, useColorScheme } from "react-native";
 
 import { useColors } from "@/hooks/useColors";
+import { useNotificationScheduler } from "@/hooks/useNotificationScheduler";
 
+/**
+ * TabLayout mounts the notification scheduler here so it runs whenever any
+ * tab is active and has access to the full AppContext (tasks + settings).
+ */
 export default function TabLayout() {
   const colors = useColors();
   const colorScheme = useColorScheme();
   const isDark = colorScheme === "dark";
   const isIOS = Platform.OS === "ios";
   const isWeb = Platform.OS === "web";
+
+  // Wire up the Capacitor LocalNotifications-based scheduler.
+  // This hook keeps scheduled notifications in sync with tasks and settings.
+  useNotificationScheduler();
 
   return (
     <Tabs
@@ -49,20 +58,13 @@ export default function TabLayout() {
         name="tasks"
         options={{
           title: "Tasks",
-          tabBarIcon: ({ color, focused }) =>
-            isIOS ? (
-              <Ionicons
-                name={focused ? "checkbox" : "checkbox-outline"}
-                size={24}
-                color={color}
-              />
-            ) : (
-              <Ionicons
-                name={focused ? "checkbox" : "checkbox-outline"}
-                size={22}
-                color={color}
-              />
-            ),
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons
+              name={focused ? "checkbox" : "checkbox-outline"}
+              size={isIOS ? 24 : 22}
+              color={color}
+            />
+          ),
         }}
       />
       <Tabs.Screen
