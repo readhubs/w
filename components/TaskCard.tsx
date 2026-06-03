@@ -8,6 +8,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import { Audio } from "expo-av";
 import { useColors } from "@/hooks/useColors";
 import type { Task } from "@/context/AppContext";
 
@@ -33,6 +34,29 @@ function getPriorityColor(
   return "transparent";
 }
 
+async function playCheckSound(isDone: boolean) {
+  try {
+    await Audio.setAudioModeAsync({
+      playsInSilentModeIOS: true,
+      allowsRecordingIOS: false,
+      staysActiveInBackground: false,
+    });
+    const { sound } = await Audio.Sound.createAsync(
+      isDone
+        ? require("../assets/sounds/uncheck.wav")
+        : require("../assets/sounds/check.wav"),
+      { shouldPlay: true, volume: 1.0 }
+    );
+    sound.setOnPlaybackStatusUpdate((status) => {
+      if (status.isLoaded && status.didJustFinish) {
+        sound.unloadAsync();
+      }
+    });
+  } catch {
+    // Sound file missing or error — fail silently
+  }
+}
+
 export default function TaskCard({
   task,
   onToggle,
@@ -55,6 +79,7 @@ export default function TaskCard({
 
   function handleToggle() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    playCheckSound(task.isDone);
     Animated.sequence([
       Animated.spring(scaleAnim, { toValue: 0.96, useNativeDriver: true }),
       Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true }),

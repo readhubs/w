@@ -8,11 +8,12 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
+import * as Notifications from "expo-notifications";
 import React, { useEffect } from "react";
+import { Platform } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { useColorScheme } from "react-native";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AppProvider, useApp } from "@/context/AppContext";
@@ -22,9 +23,53 @@ SplashScreen.preventAutoHideAsync();
 
 const queryClient = new QueryClient();
 
+// Set how notifications behave when app is in foreground
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+  }),
+});
+
+async function setupNotifications() {
+  // Create notification channel for Android
+  if (Platform.OS === "android") {
+    await Notifications.setNotificationChannelAsync("default", {
+      name: "Default",
+      importance: Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: "#6366f1",
+      sound: "default",
+      enableVibrate: true,
+      showBadge: true,
+    });
+    await Notifications.setNotificationChannelAsync("reminders", {
+      name: "Task Reminders",
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: "#6366f1",
+      sound: "default",
+      enableVibrate: true,
+      showBadge: true,
+    });
+  }
+
+  // Request permission
+  const { status: existingStatus } = await Notifications.getPermissionsAsync();
+  if (existingStatus !== "granted") {
+    await Notifications.requestPermissionsAsync({
+      ios: {
+        allowAlert: true,
+        allowBadge: true,
+        allowSound: true,
+      },
+    });
+  }
+}
+
 function RootLayoutNav() {
   const colors = useColors();
-  const { settings } = useApp();
 
   return (
     <Stack
@@ -38,34 +83,13 @@ function RootLayoutNav() {
       }}
     >
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-      <Stack.Screen
-        name="task/[id]"
-        options={{ title: "Task Details", headerShown: true }}
-      />
-      <Stack.Screen
-        name="project/[id]"
-        options={{ headerShown: false }}
-      />
-      <Stack.Screen
-        name="diary/new"
-        options={{ title: "New Entry", headerShown: true }}
-      />
-      <Stack.Screen
-        name="diary/[id]"
-        options={{ title: "Diary Entry", headerShown: true }}
-      />
-      <Stack.Screen
-        name="money/add"
-        options={{ title: "Add Money Entry", headerShown: true }}
-      />
-      <Stack.Screen
-        name="money/table"
-        options={{ title: "Money Table", headerShown: true }}
-      />
-      <Stack.Screen
-        name="settings"
-        options={{ title: "Settings", headerShown: true }}
-      />
+      <Stack.Screen name="task/[id]" options={{ title: "Task Details", headerShown: true }} />
+      <Stack.Screen name="project/[id]" options={{ headerShown: false }} />
+      <Stack.Screen name="diary/new" options={{ title: "New Entry", headerShown: true }} />
+      <Stack.Screen name="diary/[id]" options={{ title: "Diary Entry", headerShown: true }} />
+      <Stack.Screen name="money/add" options={{ title: "Add Money Entry", headerShown: true }} />
+      <Stack.Screen name="money/table" options={{ title: "Money Table", headerShown: true }} />
+      <Stack.Screen name="settings" options={{ title: "Settings", headerShown: true }} />
     </Stack>
   );
 }
@@ -77,6 +101,10 @@ export default function RootLayout() {
     Inter_600SemiBold,
     Inter_700Bold,
   });
+
+  useEffect(() => {
+    setupNotifications();
+  }, []);
 
   useEffect(() => {
     if (fontsLoaded || fontError) {
