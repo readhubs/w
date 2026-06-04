@@ -15,18 +15,27 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.workspace.micky"
+      "infoPlist": {
+        "UIBackgroundModes": ["fetch", "remote-notification"]
+      }
     },
     "android": {
+      "package": "com.micky.app",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/icon.png",
         "backgroundColor": "#000000"
       },
-      "package": "com.workspace.micky"
+      "permissions": [
+        "android.permission.NOTIFICATIONS",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.VIBRATE",
+        "android.permission.WAKE_LOCK",
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.USE_EXACT_ALARM"
+      ]
     },
     "web": {
-      "bundler": "metro",
-      "output": "single",
       "favicon": "./assets/images/icon.png"
     },
     "plugins": [
@@ -42,14 +51,19 @@
         "expo-notifications",
         {
           "icon": "./assets/images/icon.png",
-          "color": "#FFC000",
-          "sounds": []
+          "color": "#6366f1",
+          "sounds": [],
+          "mode": "production"
         }
       ]
     ],
     "experiments": {
-      "typedRoutes": true,
-      "reactCompiler": true
+      "typedRoutes": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "8b537bbd-c970-400f-9b9a-56936b966d5c"
+      }
     }
   }
 }

@@ -39,3 +39,8 @@ yarn-error.*
 .vercel
 
 .env
+
+# build output
+build/
+dist/
+
